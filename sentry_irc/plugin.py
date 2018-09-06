@@ -20,6 +20,19 @@ from ssl import wrap_socket
 from sentry.plugins.bases.notify import NotificationPlugin
 from sentry.utils.http import absolute_uri
 
+try:
+    from sentry.http import safe_socket_connect
+except ImportError:
+    def safe_socket_connect(address, timeout=30, ssl=False):
+        # NOTE: This function is not actually safe, but is
+        # API compatible for backwards compatibility
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(address)
+        if not ssl:
+            return s
+        return wrap_socket(s)
+
 
 BASE_MAXIMUM_MESSAGE_LENGTH = 400
 PING_RE = re.compile(r'^PING\s*:\s*(.*)$')
@@ -114,43 +127,39 @@ class IRCMessage(NotificationPlugin):
         ssl_c = self.get_option('ssl', project)
 
         start = time.time()
-        irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        irc.settimeout(self.timeout)
-        irc.connect((server, int(port)))
-        if ssl_c:
-            ircsock = wrap_socket(irc)
-        else:
-            ircsock = irc
-        if password:
-            ircsock.send("PASS %s\n" % password)
-        ircsock.send("USER %s %s %s :Sentry IRC bot\n" % ((nick,) * 3))
-        ircsock.send("NICK %s\n" % nick)
-        while (time.time() - start) < self.timeout:
-            ircmsg = ircsock.recv(2048).strip('\n\r')
-            real_nick = CONN_RE.search(ircmsg)
-            if real_nick is not None:
-                nick = real_nick.group(1)
-            pong = PING_RE.findall(ircmsg)
-            if pong:
-                ircsock.send("PONG %s\n" % pong)
-            if re.findall(' 433 \* %s' % nick, ircmsg):
-                nick += '%s' % randrange(1000, 2000)
-                ircsock.send("NICK %s\n" % nick)
+        ircsock = safe_socket_connect((server, int(port)), ssl=ssl_c)
+        try:
+            if password:
+                ircsock.send("PASS %s\n" % password)
+            ircsock.send("USER %s %s %s :Sentry IRC bot\n" % ((nick,) * 3))
+            ircsock.send("NICK %s\n" % nick)
+            while (time.time() - start) < self.timeout:
+                ircmsg = ircsock.recv(2048).strip('\n\r')
+                real_nick = CONN_RE.search(ircmsg)
+                if real_nick is not None:
+                    nick = real_nick.group(1)
+                pong = PING_RE.findall(ircmsg)
+                if pong:
+                    ircsock.send("PONG %s\n" % pong)
+                if re.findall(' 433 \* %s' % nick, ircmsg):
+                    nick += '%s' % randrange(1000, 2000)
+                    ircsock.send("NICK %s\n" % nick)
+                    ircmsg = ircsock.recv(2048)
+                if re.findall(' 00[1-4] %s' % nick, ircmsg):
+                    for room in rooms:
+                        if not without_join:
+                            ircsock.send("JOIN %s\n" % room)
+                        ircsock.send("PRIVMSG %s :%s\n" % (room, message))
+                        if not without_join:
+                            ircsock.send("PART %s\n" % room)
+                    for user in users:
+                        ircsock.send("PRIVMSG %s :%s\n" % (user, message))
+                    break
+
+            ircsock.send("QUIT\n")
+
+            # try to flush pending buffer
+            while (time.time() - start) < self.timeout and ircmsg:
                 ircmsg = ircsock.recv(2048)
-            if re.findall(' 00[1-4] %s' % nick, ircmsg):
-                for room in rooms:
-                    if not without_join:
-                        ircsock.send("JOIN %s\n" % room)
-                    ircsock.send("PRIVMSG %s :%s\n" % (room, message))
-                    if not without_join:
-                        ircsock.send("PART %s\n" % room)
-                for user in users:
-                    ircsock.send("PRIVMSG %s :%s\n" % (user, message))
-                break
-
-        ircsock.send("QUIT\n")
-
-        # try to flush pending buffer
-        while (time.time() - start) < self.timeout and ircmsg:
-            ircmsg = ircsock.recv(2048)
-        irc.close()
+        finally:
+            ircsock.close()
