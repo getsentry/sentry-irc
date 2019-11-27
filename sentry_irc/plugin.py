@@ -94,9 +94,10 @@ class IRCMessage(NotificationPlugin):
     def notify_users(self, group, event, fail_silently=False, **kwargs):
         link = self.get_group_url(group)
         message = event.message.replace('\n', ' ').replace('\r', ' ')
-        if event.server_name:
+        server_name = event.get_tag("server_name") or ""
+        if server_name:
             message_format = '[%s] %s (%s)'
-            message_args = (event.server_name, message, link)
+            message_args = (server_name, message, link)
         else:
             message_format = '%s (%s)'
             message_args = (message, link)
@@ -104,7 +105,7 @@ class IRCMessage(NotificationPlugin):
         max_message_length = (
             BASE_MAXIMUM_MESSAGE_LENGTH
             - len(link)
-            - len(event.server_name or '')
+            - len(server_name)
             - len(message_format.replace('%s', '')) # No of brackets/spaces
         )
         if len(message) > max_message_length:

@@ -34,7 +34,7 @@ class TestIRCMessage(mimic.MimicTestBase):
         event = self.mimic.create_mock_anything()
         event.project = arbitrary_project
         event.message = message
-        event.server_name = arbitrary_server_name
+        event.get_tag(self.mimic.ignore_arg()).and_return(arbitrary_server_name)
         return arbitrary_group, event
 
     def test_clean_passes(self):
@@ -79,5 +79,5 @@ class TestIRCMessage(mimic.MimicTestBase):
         )
         # ensure that server name is still present
         self.assertTrue(
-            str(event.server_name) in message
+            arbitrary_server_name in message
         )
